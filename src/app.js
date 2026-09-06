@@ -4,6 +4,7 @@ import { createElement, ShieldCheck, KeyRound, Eye, EyeOff, Trash2, SlidersHoriz
 import { normalizeSecret, validateOptions, makeTotp, timeRemaining, parseLink, makeLink, makeDirectLink, parseQr } from './core.mjs';
 import { readQrFile } from './read-qr.mjs';
 import { HISTORY_KEY, historyId, readHistory, rememberHistory, updateHistoryDetails } from './history.mjs';
+import { VAULT_KEY, getOrCreateDeviceKey, encryptVault, decryptVault, deleteDeviceKey } from './vault.mjs';
 
 const icons = { ShieldCheck, KeyRound, Eye, EyeOff, Trash2, SlidersHorizontal, ChevronDown, ChevronUp, Copy, QrCode, Link, LockKeyhole, Check, X, Download, ArrowRight, ScanLine, Pencil };
 let activeTotp = null;
@@ -12,6 +13,7 @@ let noticeTimer;
 let qrRevision = 0;
 let importRevision = 0;
 let lastHref = '';
+let vaultLoadPromise;
 
 const app = Vue.createApp({
   data: () => ({
@@ -20,6 +22,7 @@ const app = Vue.createApp({
     issuer: '', account: '', qrImage: '', qrError: '', importError: '', importing: false,
     historyEntries: [], historyError: '', historyRevealed: false, saveHistory: true,
     editingHistoryId: '', editIssuerDraft: '', editAccountDraft: '', noteDraft: '', editHistoryError: '',
+    vaultKey: null, vaultReady: false,
     directMode: location.pathname.startsWith('/2fa/'),
   }),
   computed: {
@@ -29,8 +32,9 @@ const app = Vue.createApp({
       return this.token.slice(0, split) + ' ' + this.token.slice(split);
     },
   },
-  mounted() {
-    this.loadHistory();
+  async mounted() {
+    vaultLoadPromise = this.loadHistory();
+    await vaultLoadPromise;
     this.loadLink();
     window.addEventListener('storage', this.syncHistory);
     interval = setInterval(this.update, 250);
@@ -57,9 +61,9 @@ const app = Vue.createApp({
       this.$refs.noteDialog.showModal();
       this.$nextTick(() => this.$refs.editIssuerInput.focus());
     },
-    saveHistoryDetails() {
+    async saveHistoryDetails() {
       try {
-        const entries = readHistory(localStorage);
+        const entries = await this.readEncryptedHistory();
         const updated = updateHistoryDetails(entries, this.editingHistoryId, {
           issuer: this.editIssuerDraft,
           account: this.editAccountDraft,
@@ -69,7 +73,7 @@ const app = Vue.createApp({
           this.editHistoryError = '这条记录已被删除，请关闭后重新选择。';
           return;
         }
-        if (!this.persistHistory(updated)) {
+        if (!await this.persistHistory(updated)) {
           this.editHistoryError = this.historyError;
           return;
         }
@@ -90,37 +94,62 @@ const app = Vue.createApp({
     maskedHistorySecret(entry) {
       return this.historyRevealed ? entry.secret : (entry.secret.length > 8 ? entry.secret.slice(0, 4) + ' •••• ' + entry.secret.slice(-4) : '••••••••');
     },
-    loadHistory() {
+    async loadHistory() {
+      if (this.directMode) {
+        this.vaultReady = true;
+        return;
+      }
       try {
-        this.historyEntries = readHistory(localStorage);
+        this.vaultKey = await getOrCreateDeviceKey();
+        const encrypted = localStorage.getItem(VAULT_KEY);
+        if (encrypted) {
+          this.historyEntries = await decryptVault(encrypted, this.vaultKey);
+        } else {
+          const legacy = readHistory(localStorage);
+          this.historyEntries = legacy;
+          if (legacy.length) {
+            localStorage.setItem(VAULT_KEY, await encryptVault(legacy, this.vaultKey));
+            localStorage.removeItem(HISTORY_KEY);
+          }
+        }
         this.historyError = '';
       } catch {
         this.historyEntries = [];
-        this.historyError = '无法读取本地历史，请检查浏览器存储权限，或清空损坏的记录。';
+        this.historyError = '无法解锁加密历史。数据可能已损坏，或此浏览器不支持安全存储。';
+      } finally {
+        this.vaultReady = true;
       }
     },
-    syncHistory(event) {
-      if (event.key === HISTORY_KEY || event.key === null) this.loadHistory();
+    async syncHistory(event) {
+      if (event.key === VAULT_KEY || event.key === HISTORY_KEY || event.key === null) await this.loadHistory();
     },
-    persistHistory(entries) {
+    async readEncryptedHistory() {
+      this.vaultKey ||= await getOrCreateDeviceKey();
+      const raw = localStorage.getItem(VAULT_KEY);
+      return raw ? decryptVault(raw, this.vaultKey) : [];
+    },
+    async persistHistory(entries) {
       try {
-        if (entries.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
-        else localStorage.removeItem(HISTORY_KEY);
+        this.vaultKey ||= await getOrCreateDeviceKey();
+        if (entries.length) localStorage.setItem(VAULT_KEY, await encryptVault(entries, this.vaultKey));
+        else localStorage.removeItem(VAULT_KEY);
+        localStorage.removeItem(HISTORY_KEY);
         this.historyEntries = entries;
         this.historyError = '';
         return true;
       } catch {
-        this.historyError = '本地历史保存或删除失败，请检查浏览器存储权限及空间。';
+        this.historyError = '加密历史保存或删除失败，请检查浏览器安全存储权限及空间。';
         return false;
       }
     },
-    rememberCurrent() {
+    async rememberCurrent() {
       if (this.directMode || !this.saveHistory || !this.token) return;
       try {
-        const entries = readHistory(localStorage);
-        this.persistHistory(rememberHistory(entries, this));
+        if (!this.vaultReady && vaultLoadPromise) await vaultLoadPromise;
+        const entries = await this.readEncryptedHistory();
+        await this.persistHistory(rememberHistory(entries, this));
       } catch {
-        this.historyError = '无法保存历史，请检查浏览器存储权限，或清空损坏的记录。';
+        this.historyError = '无法加密保存历史，请检查浏览器安全存储权限及空间。';
       }
     },
     reuseHistory(entry) {
@@ -135,19 +164,27 @@ const app = Vue.createApp({
       document.getElementById('secret').focus();
       document.querySelector('main').scrollIntoView({ behavior: 'smooth' });
     },
-    deleteHistory(entry) {
+    async deleteHistory(entry) {
       try {
-        const entries = readHistory(localStorage);
-        this.persistHistory(entries.filter(row => historyId(row) !== historyId(entry)));
+        const entries = await this.readEncryptedHistory();
+        await this.persistHistory(entries.filter(row => historyId(row) !== historyId(entry)));
       } catch {
         this.historyError = '删除失败，请检查浏览器存储权限，或清空损坏的记录。';
       }
     },
-    clearHistory() {
-      if (this.persistHistory([])) {
+    async clearHistory() {
+      try {
+        localStorage.removeItem(VAULT_KEY);
+        localStorage.removeItem(HISTORY_KEY);
+        await deleteDeviceKey();
+        this.vaultKey = null;
+        this.historyEntries = [];
+        this.historyError = '';
         this.historyRevealed = false;
         this.$refs.clearHistoryDialog.close();
         this.showNotice('本地历史已清空');
+      } catch {
+        this.historyError = '加密历史删除失败，请检查浏览器存储权限。';
       }
     },
     options() { return validateOptions(this); },
@@ -174,7 +211,7 @@ const app = Vue.createApp({
       this.notice = '';
       document.getElementById('secret').focus();
     },
-    generate() {
+    async generate() {
       this.error = '';
       this.token = '';
       activeTotp = null;
@@ -182,7 +219,7 @@ const app = Vue.createApp({
         this.secret = normalizeSecret(this.secret);
         activeTotp = makeTotp(this.secret, this.options());
         this.update();
-        this.rememberCurrent();
+        await this.rememberCurrent();
       } catch (error) {
         this.error = error.message;
       }

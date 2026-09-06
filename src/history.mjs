@@ -9,6 +9,9 @@ export function readHistory(storage) {
   const raw = storage.getItem(HISTORY_KEY);
   if (!raw) return [];
   const entries = JSON.parse(raw);
+  return sanitizeHistory(entries);
+}
+export function sanitizeHistory(entries) {
   if (!Array.isArray(entries)) throw new Error('Invalid history');
   const valid = [];
   for (const entry of entries) {

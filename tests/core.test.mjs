@@ -7,6 +7,7 @@ import { PNG } from 'pngjs';
 import { normalizeSecret, validateOptions, makeTotp, parseLink, makeLink, timeRemaining, parseQr } from '../src/core.mjs';
 import { makeDirectLink } from '../src/core.mjs';
 import { readHistory, rememberHistory, updateHistoryDetails, historyId, HISTORY_LIMIT } from '../src/history.mjs';
+import { encryptVault, decryptVault } from '../src/vault.mjs';
 
 const secret = 'JBSWY3DPEHPK3PXP';
 // RFC 6238 Appendix B reference vectors, not production credentials.
@@ -132,4 +133,18 @@ test('history details can be edited without changing the key or OTP settings', (
   assert.equal(limited[0].issuer.length, 64);
   assert.equal(limited[0].account.length, 64);
   assert.equal(limited[0].note.length, 200);
+});
+test('encrypted history roundtrips, hides plaintext, uses fresh IVs and detects tampering', async () => {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const entries = rememberHistory([], { secret, issuer: 'GitHub', account: 'main@example.com' }, 1);
+  entries[0].note = 'primary account';
+  const first = await encryptVault(entries, key);
+  const second = await encryptVault(entries, key);
+  assert.deepEqual(await decryptVault(first, key), entries);
+  assert.notEqual(first, second);
+  for (const plaintext of [secret, 'GitHub', 'main@example.com', 'primary account']) assert.equal(first.includes(plaintext), false);
+  const tampered = JSON.parse(first);
+  tampered.data = tampered.data.slice(0, -4) + 'AAAA';
+  await assert.rejects(decryptVault(JSON.stringify(tampered), key), /无法解锁/);
+  await assert.rejects(crypto.subtle.exportKey('raw', key));
 });

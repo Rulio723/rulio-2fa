@@ -71,7 +71,7 @@
           <h2 id="history-title">本地历史 <span class="history-count">{{ historyEntries.length }} / 50</span></h2>
           <label class="history-toggle"><input type="checkbox" v-model="saveHistory">记录本次使用</label>
         </div>
-        <p class="history-warning">历史密钥以明文保存在此浏览器，仅在可信设备上使用。</p>
+        <p class="history-warning">历史使用 AES-256-GCM 加密保存在此设备，打开本站时自动解锁。</p>
         <p class="error" role="alert" v-if="historyError">{{ historyError }}</p>
         <p class="history-empty" v-if="!historyEntries.length">暂无历史记录</p>
         <ul class="history-list" v-else>

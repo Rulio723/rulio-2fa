@@ -176,7 +176,7 @@ try {
   assert.equal(await page.locator('.history-row').count(), historyCount - 1);
   await page.getByRole('button', { name: '清空历史', exact: true }).click();
   await page.getByRole('button', { name: '确认清空', exact: true }).click();
-  assert.equal(await page.locator('.history-row').count(), 0);
+  await page.waitForFunction(() => document.querySelectorAll('.history-row').length === 0);
   await page.reload();
   assert.equal(await page.locator('.history-row').count(), 0);
   await page.getByLabel('记录本次使用').uncheck();
@@ -195,7 +195,29 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.keyboard.press('Escape');
 
-  const stored = await page.evaluate(() => localStorage.getItem('twofa.history.v1'));
+  const stored = await page.evaluate(() => localStorage.getItem('twofa.history.v2'));
+  assert.ok(stored);
+  assert.equal(await page.evaluate(() => localStorage.getItem('twofa.history.v1')), null);
+  for (const plaintext of [secret, 'Tencent Cloud Services', '100023184316']) assert.equal(stored.includes(plaintext), false);
+  assert.equal(await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('rulio-2fa-vault', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const key = await new Promise((resolve, reject) => {
+      const request = database.transaction('keys').objectStore('keys').get('history-aes-gcm-v1');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    try {
+      await crypto.subtle.exportKey('raw', key);
+      return false;
+    } catch {
+      return true;
+    }
+  }), true);
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`${base}/2fa/${secret}?digits=8&period=60&algorithm=SHA256`);
@@ -210,7 +232,8 @@ try {
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), code);
     await page.clock.runFor(60000);
     assert.equal(await page.locator('.direct-token').innerText(), makeTotp(secret, { digits: 8, period: 60, algorithm: 'SHA256' }).generate({ timestamp: timestamp + 60000 }));
-    assert.equal(await page.evaluate(() => localStorage.getItem('twofa.history.v1')), stored);
+    assert.equal(await page.evaluate(() => localStorage.getItem('twofa.history.v2')), stored);
+    assert.equal(await page.evaluate(() => localStorage.getItem('twofa.history.v1')), null);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `test-results/direct-${width}.png`, fullPage: true });
   }
@@ -220,12 +243,46 @@ try {
   await page.getByRole('link', { name: '返回首页' }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'test-results/history-mobile.png', fullPage: true });
-  await page.evaluate(() => localStorage.setItem('twofa.history.v1', '{'));
+  await page.evaluate(() => localStorage.setItem('twofa.history.v2', '{'));
   await page.reload();
   await page.locator('.history [role=alert]').waitFor();
   await page.getByRole('button', { name: '清空历史', exact: true }).click();
   await page.getByRole('button', { name: '确认清空', exact: true }).click();
-  assert.equal(await page.locator('.history [role=alert]').count(), 0);
+  await page.waitForFunction(() => !document.querySelector('.history [role=alert]'));
+
+  const legacy = [{ secret, digits: 6, period: 30, algorithm: 'SHA1', issuer: 'Legacy', account: 'old@example.com', note: 'migrated', usedAt: now }];
+  await page.evaluate(entries => localStorage.setItem('twofa.history.v1', JSON.stringify(entries)), legacy);
+  await page.reload();
+  assert.equal(await page.locator('.history-row').count(), 1);
+  const migrated = await page.evaluate(() => localStorage.getItem('twofa.history.v2'));
+  assert.ok(migrated);
+  assert.equal(await page.evaluate(() => localStorage.getItem('twofa.history.v1')), null);
+  for (const plaintext of [secret, 'Legacy', 'old@example.com', 'migrated']) assert.equal(migrated.includes(plaintext), false);
+  await page.reload();
+  assert.equal(await page.locator('.history-name').first().innerText(), 'Legacy · old@example.com');
+
+  await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('rulio-2fa-vault', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction('keys', 'readwrite');
+      transaction.objectStore('keys').delete('history-aes-gcm-v1');
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  });
+  await page.reload();
+  await page.locator('.history [role=alert]').waitFor();
+  assert.equal(await page.locator('.history-row').count(), 0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('twofa.history.v2')), migrated);
+  await page.getByRole('button', { name: '清空历史', exact: true }).click();
+  await page.getByRole('button', { name: '确认清空', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.history [role=alert]'));
   const blocked = await context.newPage();
   await blocked.addInitScript(() => {
     Storage.prototype.setItem = () => { throw new Error('Storage denied'); };
