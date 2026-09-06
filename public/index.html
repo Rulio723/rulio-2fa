@@ -1,96 +1,140 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TOTP Generator</title>
-  <link rel="stylesheet" href="css/bulma-0.9.4.min.css">
-  <style>
-    [v-cloak] {
-      display: none;
-    }
-
-    html, body {
-      height: 100%;
-    }
-
-    body > footer {
-      position: sticky;
-      top: 100vh;
-    }
-
-    .footer {
-      padding: 2rem;
-    }
-
-    @media screen and (min-width: 1068px) {
-      .container {
-        max-width: 600px;
-        width: 600px;
-      }
-    }
-  </style>
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="双重验证码与验证器二维码">
+  <title>2FA · 双重验证码</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <script defer src="/js/assets/vue-3.4.20.global.prod.js"></script>
+  <script defer src="/js/app.js"></script>
 </head>
 <body>
-
-  <script defer src="js/assets/vue-3.4.20.global.prod.js"></script>
-  <script defer src="js/assets/otpauth-9.1.3.min.js"></script>
-  <script defer src="js/assets/clipboard-2.0.6.min.js"></script>
-  <script defer src="js/app.js?v=1.2"></script>
-
-  <section id="app" class="section" v-cloak>
-
-    <div class="container">
-
-      <h1 class="title">TOTP Token Generator</h1>
-
-      <div class="field">
-        <label class="label is-uppercase">Your Secret Key</label>
-        <div class="control">
-          <input class="input" type="text" v-model="secret_key" placeholder="The secret key (in base-32 format)">
+  <div id="app" v-cloak>
+    <main class="direct-page" v-if="directMode">
+      <h1>当前验证码为</h1>
+      <button v-if="token" type="button" class="direct-token" @click="copyToken" title="复制验证码" aria-label="复制验证码">{{ token }}</button>
+      <p v-if="token" class="direct-countdown">倒计时 {{ remaining }}s</p>
+      <p v-if="error" class="error" role="alert">{{ error }}</p>
+      <a v-if="error" class="text-button" href="/">返回首页</a>
+    </main>
+    <div v-show="!directMode">
+    <header class="site-header">
+      <div class="brand"><icon name="ShieldCheck"></icon><span>2FA</span><span class="brand-divider"></span><span class="brand-subtitle">双重验证码</span></div>
+      <span class="header-label">TOTP</span>
+    </header>
+    <main>
+      <div class="section-title"><h1>获取验证码</h1><span class="section-number">01 / 验证</span></div>
+      <form @submit.prevent="generate" novalidate>
+        <div class="input-heading">
+          <label for="secret">双重验证密钥</label>
+          <button class="text-button import-button" type="button" @click="$refs.qrFile.click()" :disabled="importing"><icon name="ScanLine"></icon>{{ importing ? '正在识别' : '导入二维码' }}</button>
+          <input ref="qrFile" id="qr-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" @change="importQr" hidden>
         </div>
-      </div>
-
-      <div class="field">
-        <label class="label is-uppercase">Number of Digits</label>
-        <div class="control">
-          <input class="input" type="text" v-model="digits" placeholder="Usually 6">
+        <div class="secret-field" :class="{ invalid: error }">
+          <icon name="KeyRound"></icon>
+          <input id="secret" v-model="secret" @input="invalidate" :type="revealed ? 'text' : 'password'" placeholder="输入密钥" autocomplete="off" spellcheck="false" autocapitalize="off" :aria-invalid="Boolean(error)" aria-describedby="secret-error" maxlength="600">
+          <button class="icon-button" type="button" @click="copySecret" :disabled="!secret" title="复制密钥" aria-label="复制密钥"><icon name="Copy"></icon></button>
+          <button class="icon-button" type="button" @click="revealed = !revealed" :title="revealed ? '隐藏密钥' : '显示密钥'" :aria-label="revealed ? '隐藏密钥' : '显示密钥'"><icon :name="revealed ? 'EyeOff' : 'Eye'"></icon></button>
         </div>
-      </div>
-
-      <div class="field">
-        <label class="label is-uppercase">Token Period (in seconds)</label>
-        <div class="control">
-          <input class="input" type="text" v-model="period" placeholder="Usually 30">
+        <p id="secret-error" class="error" role="alert" v-if="error">{{ error }}</p>
+        <p class="error" role="alert" v-if="importError">{{ importError }}</p>
+        <div class="form-actions">
+          <button class="primary" type="submit"><icon name="ArrowRight"></icon>获取验证码</button>
+          <button class="icon-button clear-button" type="button" @click="clear" title="清空" aria-label="清空" :disabled="!secret && !error"><icon name="Trash2"></icon></button>
+          <button type="button" class="text-button advanced-toggle" @click="advanced = !advanced" :aria-expanded="advanced"><icon name="SlidersHorizontal"></icon>参数设置<icon :name="advanced ? 'ChevronUp' : 'ChevronDown'"></icon></button>
         </div>
-      </div>
-
-      <div class="content">
-        <span class="has-text-grey is-size-7">Updating in {{ updatingIn }} seconds</span>
-        <progress class="progress is-info is-small" v-bind:value="updatingIn" :max="period"></progress>
-      </div>
-
-      <div class="box">
-        <p class="title is-size-1 has-text-centered" id="token">{{ token }}</p>
-      </div>
-
-      <div class="control is-clearfix">
-        <a class="button is-large is-light is-pulled-right" id="clipboard-button" data-clipboard-target="#token" title="Copy token to clipboard">
-          <img src="img/clippy.svg" height="36" width="36">
-        </a>
-      </div>
-
+        <div class="settings" v-if="advanced">
+          <div><label for="digits">验证码位数</label><select id="digits" v-model.number="digits" @change="invalidate"><option :value="6">6 位</option><option :value="7">7 位</option><option :value="8">8 位</option></select></div>
+          <div><label for="period">刷新周期（秒）</label><input id="period" type="number" min="5" max="300" step="1" v-model="period" @input="invalidate"></div>
+          <div><label for="algorithm">哈希算法</label><select id="algorithm" v-model="algorithm" @change="invalidate"><option>SHA1</option><option>SHA256</option><option>SHA512</option></select></div>
+        </div>
+      </form>
+      <section class="result" aria-label="验证码结果">
+        <div class="result-top"><h2>当前验证码</h2><span class="result-state">{{ token ? '有效' : '待生成' }}</span></div>
+        <div class="token-row">
+          <output id="token" :class="{ empty: !token }" :aria-label="token ? '当前验证码 ' + token : '尚未生成验证码'">{{ displayToken }}</output>
+          <button class="icon-button copy-token" type="button" @click="copyToken" :disabled="!token" title="复制验证码" aria-label="复制验证码"><icon name="Copy"></icon></button>
+        </div>
+        <div class="countdown"><span>剩余时间</span><span><strong>{{ token ? remaining : '--' }}</strong> 秒</span></div>
+        <progress :value="token ? remaining : 0" :max="Number(period) || 30" aria-label="验证码剩余时间"></progress>
+        <div class="result-actions">
+          <button type="button" class="secondary" @click="openQr" :disabled="!token"><icon name="QrCode"></icon>生成二维码</button>
+          <button type="button" class="text-button" @click="copyLink" :disabled="!token"><icon name="Link"></icon>复制取码链接</button>
+        </div>
+      </section>
+      <p class="security-note"><icon name="LockKeyhole"></icon><span>二维码和取码链接包含密钥，请勿公开分享。</span></p>
+      <section class="history" aria-labelledby="history-title">
+        <div class="history-heading">
+          <h2 id="history-title">本地历史 <span class="history-count">{{ historyEntries.length }} / 50</span></h2>
+          <label class="history-toggle"><input type="checkbox" v-model="saveHistory">记录本次使用</label>
+        </div>
+        <p class="history-warning">历史密钥以明文保存在此浏览器，仅在可信设备上使用。</p>
+        <p class="error" role="alert" v-if="historyError">{{ historyError }}</p>
+        <p class="history-empty" v-if="!historyEntries.length">暂无历史记录</p>
+        <ul class="history-list" v-else>
+          <li v-for="entry in historyEntries" :key="historyId(entry)" class="history-row">
+            <button type="button" class="history-reuse" @click="reuseHistory(entry)" title="再次取码" aria-label="使用此历史记录取码">
+              <span class="history-note" v-if="entry.note">{{ entry.note }}</span>
+              <span class="history-name" v-if="entry.issuer || entry.account">{{ [entry.issuer, entry.account].filter(Boolean).join(' · ') }}</span>
+              <span class="history-secret">{{ maskedHistorySecret(entry) }}</span>
+              <span class="history-meta"><time>{{ historyDate(entry) }}</time><span>{{ entry.digits }} 位 · {{ entry.period }} 秒 · {{ entry.algorithm }}</span></span>
+            </button>
+            <button type="button" class="icon-button" @click="editNote(entry)" aria-label="编辑历史信息" title="编辑服务名称、账号 ID 和备注"><icon name="Pencil"></icon></button>
+            <button type="button" class="icon-button" @click="deleteHistory(entry)" aria-label="删除此历史记录" title="删除此历史记录"><icon name="Trash2"></icon></button>
+          </li>
+        </ul>
+        <div class="history-actions">
+          <button type="button" class="text-button" @click="historyRevealed = !historyRevealed" :disabled="!historyEntries.length"><icon :name="historyRevealed ? 'EyeOff' : 'Eye'"></icon>{{ historyRevealed ? '隐藏历史密钥' : '显示历史密钥' }}</button>
+          <button type="button" class="text-button danger" @click="$refs.clearHistoryDialog.showModal()" :disabled="!historyEntries.length && !historyError"><icon name="Trash2"></icon>清空历史</button>
+        </div>
+      </section>
+    </main>
+    <footer><span>2FA</span><span>基于 <a href="https://github.com/jaden/totp-generator" target="_blank" rel="noreferrer">Dan Hersam / totp-generator</a> · <a href="/LICENSE.txt">GPL-3.0</a></span></footer>
     </div>
-
-  </section>
-
-  <footer class="footer">
-    <div class="container">
-      <div class="content has-text-centered">
-        Built by <a href="https://dan.hersam.com">Dan Hersam</a>. Source on <a href="https://github.com/jaden/totp-generator">Github</a>.
+    <div class="toast" role="status" v-if="notice"><icon name="Check"></icon>{{ notice }}</div>
+    <dialog ref="noteDialog" aria-labelledby="note-title" @close="editIssuerDraft = ''; editAccountDraft = ''; noteDraft = ''; editingHistoryId = ''; editHistoryError = ''">
+      <form @submit.prevent="saveHistoryDetails">
+        <div class="dialog-title"><h2 id="note-title">编辑历史信息</h2><button type="button" class="icon-button" @click="$refs.noteDialog.close()" aria-label="关闭编辑" title="关闭"><icon name="X"></icon></button></div>
+        <div class="history-edit-fields">
+          <div><label for="history-issuer">服务名称</label><input ref="editIssuerInput" id="history-issuer" v-model="editIssuerDraft" maxlength="64" placeholder="例如 Tencent Cloud Services"></div>
+          <div><label for="history-account">账号 ID</label><input id="history-account" v-model="editAccountDraft" maxlength="64" placeholder="例如 100023184316"></div>
+        </div>
+        <label for="history-note">备注</label>
+        <textarea ref="noteInput" id="history-note" v-model="noteDraft" maxlength="200" rows="3" placeholder="例如：GitHub 主账号"></textarea>
+        <p class="note-count">{{ noteDraft.length }} / 200</p>
+        <p class="error" role="alert" v-if="editHistoryError">{{ editHistoryError }}</p>
+        <div class="history-actions">
+          <button type="button" class="text-button" @click="editIssuerDraft = ''; editAccountDraft = ''; noteDraft = ''" :disabled="!editIssuerDraft && !editAccountDraft && !noteDraft">清空内容</button>
+          <div class="note-buttons">
+            <button type="button" class="secondary" @click="$refs.noteDialog.close()">取消</button>
+            <button type="submit" class="primary">保存修改</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+    <dialog ref="clearHistoryDialog" aria-labelledby="clear-history-title">
+      <div class="dialog-title"><h2 id="clear-history-title">清空本地历史？</h2></div>
+      <p class="confirm-copy">此浏览器保存的全部历史密钥将被删除，无法恢复。当前取码内容不会清除。</p>
+      <p class="error" role="alert" v-if="historyError">{{ historyError }}</p>
+      <div class="history-actions">
+        <button type="button" class="secondary" @click="$refs.clearHistoryDialog.close()">取消</button>
+        <button type="button" class="primary" @click="clearHistory">确认清空</button>
       </div>
-    </div>
-  </footer>
-
+    </dialog>
+    <dialog ref="qrDialog" @close="qrImage = ''" @click="closeOnBackdrop" aria-labelledby="qr-title">
+      <div class="dialog-title"><h2 id="qr-title">验证器二维码</h2><button class="icon-button" type="button" @click="$refs.qrDialog.close()" aria-label="关闭二维码" title="关闭"><icon name="X"></icon></button></div>
+      <div class="qr-fields">
+        <div><label for="issuer">服务名称（可选）</label><input id="issuer" v-model="issuer" @input="refreshQr" placeholder="例如 GitHub" maxlength="64"></div>
+        <div><label for="account">账号名称（可选）</label><input id="account" v-model="account" @input="refreshQr" placeholder="例如 name@example.com" maxlength="64"></div>
+      </div>
+      <div class="qr-image"><img v-if="qrImage" :src="qrImage" width="320" height="320" alt="包含当前密钥的验证器二维码"><span v-else>{{ qrError || '正在生成' }}</span></div>
+      <p class="qr-warning">此二维码包含密钥，请妥善保管。</p>
+      <a class="primary download" :href="qrImage || undefined" download="2fa-authenticator.png" :aria-disabled="!qrImage" @click="!qrImage && $event.preventDefault()"><icon name="Download"></icon>下载二维码</a>
+    </dialog>
+  </div>
+  <noscript>请启用 JavaScript 后使用双重验证码工具。</noscript>
 </body>
 </html>
