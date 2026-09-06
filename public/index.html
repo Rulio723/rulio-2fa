@@ -26,7 +26,7 @@
       <span class="header-label">TOTP</span>
     </header>
     <main>
-      <div class="section-title"><h1>获取验证码</h1><span class="section-number">01 / 验证</span></div>
+      <div class="section-title"><div><h1>2FA 验证</h1><p class="section-description">输入双重验证密钥，即时获取当前验证码。</p></div><span class="section-number">TOTP / 本地计算</span></div>
       <form @submit.prevent="generate" novalidate>
         <div class="input-heading">
           <label for="secret">双重验证密钥</label>
