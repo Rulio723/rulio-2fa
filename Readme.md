@@ -1,8 +1,35 @@
+<div align="center">
+
 # Rulio 2FA
+
+本地运行的 TOTP 双重验证码工具
+
+[![Static Site](https://img.shields.io/badge/deployment-static-2ea44f?style=flat-square)](https://2fa.rulio.top)
+[![Cloudflare Pages](https://img.shields.io/badge/Cloudflare-Pages-F38020?style=flat-square&logo=cloudflare&logoColor=white)](https://2fa.rulio.top)
+[![TOTP](https://img.shields.io/badge/TOTP-RFC%206238-0ea5e9?style=flat-square)](https://www.rfc-editor.org/rfc/rfc6238)
+[![Web Crypto](https://img.shields.io/badge/Web%20Crypto-AES--256--GCM-059669?style=flat-square)](#安全提示)
+[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](#开发)
+[![License: GPL-3.0](https://img.shields.io/github/license/Rulio723/rulio-2fa?style=flat-square)](LICENSE)
+
+</div>
 
 纯静态的 TOTP 验证码工具，所有验证码计算、二维码生成和二维码识别均在浏览器本地完成。
 
-在线地址：[https://2fa.rulio.sryze.cc](https://2fa.rulio.sryze.cc)
+在线地址：[https://2fa.rulio.top](https://2fa.rulio.top)
+
+## 界面预览
+
+### 验证码与本地历史
+
+![Rulio 2FA 主界面](docs/screenshots/main.png)
+
+### 验证器二维码
+
+![生成验证器二维码](docs/screenshots/qr-code.png)
+
+### 简洁直链取码
+
+![简洁直链取码页面](docs/screenshots/direct-link.png)
 
 ## 功能
 
